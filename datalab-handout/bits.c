@@ -219,7 +219,7 @@ int isAsciiDigit(int x) {
  */
 int conditional(int x, int y, int z) {
   int mask = (!!x << 31) >> 31; // or -x, make 0xffffffff or 0x00000000
-  return mask & y | ~mask & z;
+  return (mask & y) | (~mask & z);
 }
 /* 
  * isLessOrEqual - if x <= y  then return 1, else return 0 
@@ -229,30 +229,31 @@ int conditional(int x, int y, int z) {
  *   Rating: 3
  */
 int isLessOrEqual(int x, int y) {
-    int sx = !!(x >> 31);
-    int sy = !!(y >> 31);
-    int same_sign = !(sx ^ sy);
+  int smaller, sx, sy, same_sign, equal, mask, vx, vy, diff, diff_sign;
+    sx = !!(x >> 31);
+    sy = !!(y >> 31);
+    same_sign = !(sx ^ sy);
 
-    int equal = !(x ^ y);
+    equal = !(x ^ y);
 
 
-    int mask = 0x7f;
+    mask = 0x7f;
     mask = mask << 8 | 0xff;
     mask = mask << 8 | 0xff;
     mask = mask << 8 | 0xff;
 
-    int vx = x & mask;
-    int vy = y & mask;
+    vx = x & mask;
+    vy = y & mask;
 
-    int diff = vy + (~vx + 1);
+    diff = vy + (~vx + 1);
 
-    int diff_sign = !!(diff >> 31);
-    int smaller = sx & ~sy | same_sign & !diff_sign; 
+    diff_sign = !!(diff >> 31);
+    smaller = (sx & ~sy) | (same_sign & !diff_sign); 
     return equal | smaller;
 }
 //4
 /* 
- * logicalNeg - implement the ! operator, using all of 
+ * 1 - implement the ! operator, using all of 
  *              the legal operators except !
  *   Examples: logicalNeg(3) = 0, logicalNeg(0) = 1
  *   Legal ops: ~ & ^ | + << >>
@@ -260,7 +261,7 @@ int isLessOrEqual(int x, int y) {
  *   Rating: 4 
  */
 int logicalNeg(int x) {
-    return (x | (~x + 1) >> 31) + 1;
+    return ((x | (~x + 1)) >> 31) + 1;
 }
 /* howManyBits - return the minimum number of bits required to represent x in
  *             two's complement
@@ -329,7 +330,7 @@ int howManyBits(int x) {
 
     temp >>=add;
 
-    return is_zero | (count + 2) & is_zero_mask;
+    return is_zero | ((count + 2) & is_zero_mask);
 }
 //float
 /* 
@@ -344,7 +345,29 @@ int howManyBits(int x) {
  *   Rating: 4
  */
 unsigned floatScale2(unsigned uf) {
-  return 2;
+  int exp, sign, mask;
+  // -0 and +0
+  if (uf == 0 || uf == 0x80000000) {
+    return uf;
+  }
+  exp = (uf >> 23) & 0xff;
+  sign = uf & (1 << 31);
+  
+  // if (exp == 0xff && (uf & ((1 << 23) - 1)) == 0) { // Only INF, not NaN
+  if (exp == 0xff) {
+    // -INF or +INF or NaN
+    return uf;
+  } else if (exp == 0) {
+    // denormalized number
+    return (uf << 1) | sign;
+  }
+
+  // Nomalized number
+  exp = exp + 1;
+  // mask 0 first 9 bits
+  mask = (1 << 23) - 1;
+  uf = (uf & mask) | (exp << 23) | sign;
+  return uf;
 }
 /* 
  * floatFloat2Int - Return bit-level equivalent of expression (int) f
@@ -359,7 +382,30 @@ unsigned floatScale2(unsigned uf) {
  *   Rating: 4
  */
 int floatFloat2Int(unsigned uf) {
-  return 2;
+  int exp = (uf >> 23) & 0xff;
+  int sign = uf & (1 << 31);
+
+  int E = exp - 127; // exp - bias
+
+  if (exp == 0xff) {
+    // NaN or INF
+    return 0x80000000u;
+  } else if (E < 0) {
+    return 0;
+  } else if (E > 31) {
+    return 0x80000000u;
+  } else {
+    int frac = (uf & ((1 << 23) - 1)) | (1 << 23); // add implicit leading 1
+    if (E < 23) {
+      frac >>= (23 - E);
+    } else {
+      frac <<= (E - 23);
+    }
+    if (sign) {
+      frac = -frac;
+    }
+    return frac;
+  }
 }
 /* 
  * floatPower2 - Return bit-level equivalent of the expression 2.0^x
@@ -375,5 +421,16 @@ int floatFloat2Int(unsigned uf) {
  *   Rating: 4
  */
 unsigned floatPower2(int x) {
-    return 2;
+  if (x < -149) {
+    return 0;
+  } else if (x > 127) {
+    return 0x7f800000; // +INF
+  } else {
+    int exp = x + 127; // exp - bias = x
+    if (exp > 0) {
+      return exp << 23; // normalized number
+    } else {
+      return 1 << (exp + 23); // denormalized number
+    }
+  }
 }
