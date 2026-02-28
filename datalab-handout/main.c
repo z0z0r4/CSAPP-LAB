@@ -1,11 +1,20 @@
-int logicalNeg(int x) {
-    int a = x | (~x + 1); // get sign bit of x and -x
-    int b = (a >> 31);
-    int c = b + 1; // if x is 0, b is 0, c is 1; otherwise, b is -1, c is 0
-    return c;
+int isLessOrEqual(int x, int y) {
+    // x <= y
+  int smaller, sx, sy, same_sign, equal, mask, diff, diff_sign;
+    sx = !(x >> 31); // 1 -> 1111 0 -> 0000
+    sy = !(y >> 31);
+    same_sign = !(sx ^ sy);
+
+    equal = !(x ^ y);
+
+    diff  = y + (~x + 1);
+
+    diff_sign = !(diff >> 31);
+    smaller = !(sx & ~sy) | (same_sign & diff_sign); 
+    return equal | smaller;
 }
 
 int main() {
-  logicalNeg(0x80000000);
+  isLessOrEqual(0x80000000, 0x7fffffff);
   return 0;
 }

@@ -229,26 +229,17 @@ int conditional(int x, int y, int z) {
  *   Rating: 3
  */
 int isLessOrEqual(int x, int y) {
-  int smaller, sx, sy, same_sign, equal, mask, vx, vy, diff, diff_sign;
+  int smaller, sx, sy, same_sign, equal, diff, diff_sign;
     sx = !!(x >> 31);
     sy = !!(y >> 31);
     same_sign = !(sx ^ sy);
 
     equal = !(x ^ y);
 
+    diff  = y + (~x + 1);
 
-    mask = 0x7f;
-    mask = mask << 8 | 0xff;
-    mask = mask << 8 | 0xff;
-    mask = mask << 8 | 0xff;
-
-    vx = x & mask;
-    vy = y & mask;
-
-    diff = vy + (~vx + 1);
-
-    diff_sign = !!(diff >> 31);
-    smaller = (sx & ~sy) | (same_sign & !diff_sign); 
+    diff_sign = !(diff >> 31);
+    smaller = (sx & ~sy) | (same_sign & diff_sign); 
     return equal | smaller;
 }
 //4
