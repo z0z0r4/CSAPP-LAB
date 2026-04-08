@@ -1,0 +1,57 @@
+    .pos 0
+    irmovq stack, %rsp
+    irmovq src, %rdi
+    irmovq dest, %rsi
+    irmovq $3, %r9
+    rrmovq %r9, %rdx
+    call copy_block
+    halt
+
+.align 8
+src:
+    .quad 0x00a
+    .quad 0x0b0
+    .quad 0xc00
+
+dest:
+    .quad 0x111
+    .quad 0x222
+    .quad 0x333
+
+copy_block:
+    xorq %rax, %rax # result = 0
+    jmp Test
+
+
+Loop:
+    # val -> %8
+
+    # val = *src
+    mrmovq (%rdi), %r8
+    
+    irmovq $8, %r9
+
+    # src++
+    addq %r9, %rdi
+
+    # *dest = val
+    rmmovq %r8, (%rsi)
+
+    # dest++
+    addq %r9, %rsi
+
+    # result ^= val
+    xorq %r8, %rax
+
+    # len--
+    irmovq $1, %r9
+    subq %r9, %rdx
+
+Test:
+    andq %rdx, %rdx   
+    jg Loop
+
+    ret
+
+.pos 0x200
+stack:
