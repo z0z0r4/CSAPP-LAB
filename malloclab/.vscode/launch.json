@@ -8,7 +8,8 @@
             "program": "${workspaceFolder}/mdriver",
             "args": [
                 "-t", "traces",
-                "-v"
+                "-v",
+                "-l"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
