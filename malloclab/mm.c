@@ -276,9 +276,9 @@ void remove_chunk_from_free_linked_list(void *ptr)
     set_chunk_prev_p(next_chunk_ptr, prev_chunk_ptr);
 }
 
-void separate_free_chunk(void *ptr, size_t new_chunk_size)
+void separate_free_chunk(void *ptr,size_t current_chunk_size, size_t new_chunk_size)
 {
-    size_t current_chunk_size = GET_SIZE(ptr);
+    // size_t current_chunk_size = GET_SIZE(ptr);
     if (current_chunk_size >= new_chunk_size + SMALLEST_CHUNK_SIZE)
     {
         set_chunk_meta(ptr, new_chunk_size, 0);
@@ -492,7 +492,7 @@ void *mm_malloc(size_t size)
         remove_chunk_from_free_linked_list(ptr);
         if (current_chunk_size >= newsize + SMALLEST_CHUNK_SIZE)
         {
-            separate_free_chunk(ptr, newsize);
+            separate_free_chunk(ptr,current_chunk_size, newsize);
             set_chunk_meta(ptr, newsize, 1);
         }
         else
@@ -593,7 +593,7 @@ void *mm_realloc(void *ptr, size_t size)
     {
         if (oldsize >= req_chunk_size + SMALLEST_CHUNK_SIZE)
         {
-            separate_free_chunk(oldptr, req_chunk_size);
+            separate_free_chunk(oldptr, oldsize, req_chunk_size);
             set_chunk_meta(oldptr, req_chunk_size, 1);
         }
         // mm_checkheap(0);
@@ -617,11 +617,8 @@ void *mm_realloc(void *ptr, size_t size)
             if (merged_chunk_size >= req_chunk_size + SMALLEST_CHUNK_SIZE)
             {
                 // separate the merged chunk into new allocated chunk and free chunk
+                separate_free_chunk(oldptr, merged_chunk_size, req_chunk_size);
                 set_chunk_meta(oldptr, req_chunk_size, 1);
-                void *new_chunk_ptr = (char *)oldptr + req_chunk_size;
-                size_t remaining_chunk_size = merged_chunk_size - req_chunk_size;
-                set_chunk_meta(new_chunk_ptr, remaining_chunk_size, 0);
-                insert_chunk_to_bucket(new_chunk_ptr);
             }
             else
             {
