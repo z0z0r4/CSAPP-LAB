@@ -42,6 +42,9 @@ team_t team = {
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
+#define BUCKET_SIZE 20
+// #define BUCKET_STEP 32
+
 #define CHUNK_HEADER_SIZE 8
 #define CHUNK_FOOTER_SIZE 8
 
@@ -69,11 +72,42 @@ team_t team = {
 
 #define GET_PREV_FREE_CHUNK(p) ((void *)GET_PTR((char *)p + CHUNK_HEADER_SIZE + CHUNK_NEXT_FREE_P_SIZE))
 
-#define SMALLEST_CHUNK_SIZE (CHUNK_HEADER_SIZE + CHUNK_FOOTER_SIZE + CHUNK_NEXT_FREE_P_SIZE + CHUNK_PREV_FREE_P_SIZE)
+#define SMALLEST_CHUNK_SIZE (CHUNK_HEADER_SIZE + CHUNK_FOOTER_SIZE + CHUNK_NEXT_FREE_P_SIZE + CHUNK_PREV_FREE_P_SIZE )
 
-static void *sentinel_chunk_ptr = NULL;
+// static void *sentinel_chunk_ptr = NULL;
 
 // static void *rover = NULL;
+
+// 32 * 128 = 4096
+static void *bucket[BUCKET_SIZE];
+
+// linear
+// int get_slot_index(size_t size) {
+//     int slot_index = size / BUCKET_STEP;
+//     if (slot_index >= BUCKET_SIZE)
+//     {
+//         slot_index = BUCKET_SIZE - 1;
+//     }
+//     return slot_index;
+// }
+
+// 2 pow
+int get_slot_index(size_t size) {
+    int class_index = 0;
+    size_t class_size = 32; // 从最小块大小开始
+    
+    while (class_index < BUCKET_SIZE - 1 && size > class_size) {
+        class_size <<= 1;
+        class_index++;
+    }
+    return class_index;
+}
+
+void *get_slot_ptr(size_t size)
+{
+    int slot_index = get_slot_index(size);
+    return bucket[slot_index];
+}
 
 void set_chunk_meta(void *ptr, size_t chunk_size, int allocated_flag)
 {
@@ -108,29 +142,42 @@ void *get_new_chunk_from_heap(size_t newsize)
 }
 
 // first-fit
-// void *find_free_chunk(size_t chunk_size)
-// {
-//     if (sentinel_chunk_ptr == NULL)
-//     {
-//         return NULL;
-//     }
+void *find_free_chunk(size_t chunk_size, void *sentinel_chunk_ptr)
+{
+    if (sentinel_chunk_ptr == NULL)
+    {
+        return NULL;
+    }
 
-//     void *ptr = GET_NEXT_FREE_CHUNK(sentinel_chunk_ptr);
-//     while (ptr != sentinel_chunk_ptr)
-//     {
-//         size_t current_chunk_size = GET_SIZE(ptr);
-//         if (current_chunk_size >= chunk_size && !GET_ALLOC(ptr))
-//         {
-//             return ptr;
-//         }
-//         ptr = GET_NEXT_FREE_CHUNK(ptr);
-//     }
+    void *ptr = GET_NEXT_FREE_CHUNK(sentinel_chunk_ptr);
+    while (ptr != sentinel_chunk_ptr)
+    {
+        size_t current_chunk_size = GET_SIZE(ptr);
+        if (current_chunk_size >= chunk_size && !GET_ALLOC(ptr))
+        {
+            return ptr;
+        }
+        ptr = GET_NEXT_FREE_CHUNK(ptr);
+    }
 
-//     return NULL;
-// }
+    return NULL;
+}
 
-// next-fit
-// void *find_free_chunk(size_t chunk_size)
+// bucket first-fit
+void *find_free_chunk_in_bucket(size_t chunk_size)
+{
+    int slot_index = get_slot_index(chunk_size);
+    void *result_ptr = NULL;
+    while (slot_index < BUCKET_SIZE && result_ptr == NULL) {
+        void *sentinel_chunk_ptr = bucket[slot_index];
+        result_ptr = find_free_chunk(chunk_size, sentinel_chunk_ptr);
+        slot_index++;
+    }
+    return result_ptr;
+}
+
+// // next-fit
+// void *find_free_chunk(size_t chunk_size, void *sentinel_chunk_ptr, void *rover)
 // {
 //     if (sentinel_chunk_ptr == NULL)
 //     {
@@ -159,40 +206,40 @@ void *get_new_chunk_from_heap(size_t newsize)
 //     return NULL;
 // }
 
-// best-fit
-void *find_free_chunk(size_t chunk_size)
-{
-    if (sentinel_chunk_ptr == NULL)
-    {
-        return NULL;
-    }
+// // best-fit
+// void *find_free_chunk(size_t chunk_size)
+// {
+//     if (sentinel_chunk_ptr == NULL)
+//     {
+//         return NULL;
+//     }
 
-    size_t best_fit_size = -1;
-    void *best_fit_chunk_ptr = NULL;
-    void *ptr = GET_NEXT_FREE_CHUNK(sentinel_chunk_ptr);
-    while (ptr != sentinel_chunk_ptr)
-    {
-        size_t current_chunk_size = GET_SIZE(ptr);
-        if (current_chunk_size >= chunk_size && current_chunk_size - chunk_size < best_fit_size - chunk_size && !GET_ALLOC(ptr))
-        {
-            best_fit_size = current_chunk_size;
-            best_fit_chunk_ptr = ptr;
-            if (best_fit_size == chunk_size) {
-                break;
-            }
-        }
-        ptr = GET_NEXT_FREE_CHUNK(ptr);
-    }
+//     size_t best_fit_size = -1;
+//     void *best_fit_chunk_ptr = NULL;
+//     void *ptr = GET_NEXT_FREE_CHUNK(sentinel_chunk_ptr);
+//     while (ptr != sentinel_chunk_ptr)
+//     {
+//         size_t current_chunk_size = GET_SIZE(ptr);
+//         if (current_chunk_size >= chunk_size && current_chunk_size - chunk_size < best_fit_size - chunk_size && !GET_ALLOC(ptr))
+//         {
+//             best_fit_size = current_chunk_size;
+//             best_fit_chunk_ptr = ptr;
+//             if (best_fit_size == chunk_size) {
+//                 break;
+//             }
+//         }
+//         ptr = GET_NEXT_FREE_CHUNK(ptr);
+//     }
 
-    if (best_fit_chunk_ptr == sentinel_chunk_ptr)
-    {
-        return NULL;
-    }
+//     if (best_fit_chunk_ptr == sentinel_chunk_ptr)
+//     {
+//         return NULL;
+//     }
 
-    return best_fit_chunk_ptr;
-}
+//     return best_fit_chunk_ptr;
+// }
 
-void insert_chunk_to_free_linked_list(void *ptr)
+void insert_chunk_to_free_linked_list(void *ptr, void *sentinel_chunk_ptr)
 {
     void *sentinel_chunk_next_chunk_ptr = GET_NEXT_FREE_CHUNK(sentinel_chunk_ptr);
     // set self
@@ -204,6 +251,12 @@ void insert_chunk_to_free_linked_list(void *ptr)
 
     // set sentinel_chunk next
     set_chunk_prev_p(sentinel_chunk_next_chunk_ptr, ptr);
+}
+
+void *insert_chunk_to_bucket(void *ptr)
+{
+    size_t chunk_size = GET_SIZE(ptr);
+    insert_chunk_to_free_linked_list(ptr, get_slot_ptr(chunk_size));
 }
 
 void remove_chunk_from_free_linked_list(void *ptr)
@@ -232,105 +285,165 @@ void separate_free_chunk(void *ptr, size_t new_chunk_size)
         void *new_chunk_ptr = (char *)ptr + new_chunk_size;
         size_t remaining_chunk_size = current_chunk_size - new_chunk_size;
         set_chunk_meta(new_chunk_ptr, remaining_chunk_size, 0);
-        insert_chunk_to_free_linked_list(new_chunk_ptr);
+        insert_chunk_to_bucket(new_chunk_ptr);
     }
 }
 
-int mm_checkheap(int verbose)
+// int mm_checkheap(int verbose)
+// {
+//     void *bp;
+//     size_t implicit_free_count = 0;
+//     size_t explicit_free_count = 0;
+
+//     // ---------------------------------------------------------
+//     // 1. 隐式遍历：从 Sentinel Chunk 开始，按内存地址顺序遍历整个堆
+//     // ---------------------------------------------------------
+//     bp = sentinel_chunk_ptr;
+
+//     // 假设 sentinel_chunk 是堆的最开头，遍历直到堆顶
+//     while (bp != NULL && bp < mem_heap_hi())
+//     {
+//         size_t size = GET_SIZE(bp);
+//         int alloc = GET_ALLOC(bp);
+
+//         // 检查1：块大小不能为0，否则会导致死循环
+//         if (size == 0 && bp != sentinel_chunk_ptr)
+//         {
+//             printf("Heap Error: Chunk size is 0 at %p\n", bp);
+//             return 0;
+//         }
+
+//         // 检查2：Header 和 Footer 是否匹配
+//         size_t header = GET(bp);
+//         size_t footer = GET((char *)bp + size - CHUNK_FOOTER_SIZE);
+//         if (header != footer)
+//         {
+//             printf("Heap Error: Header and Footer mismatch at %p\n", bp);
+//             return 0;
+//         }
+
+//         // 统计真实的空闲块数量（跳过哨兵块）
+//         if (!alloc && bp != sentinel_chunk_ptr)
+//         {
+//             implicit_free_count++;
+//         }
+
+//         // 步进到下一个块
+//         bp = (char *)bp + size;
+//     }
+
+//     // ---------------------------------------------------------
+//     // 2. 显式遍历：沿着双向链表的 next 指针进行遍历
+//     // ---------------------------------------------------------
+//     if (sentinel_chunk_ptr != NULL)
+//     {
+//         void *free_bp = GET_NEXT_FREE_CHUNK(sentinel_chunk_ptr);
+
+//         while (free_bp != sentinel_chunk_ptr && free_bp != NULL)
+//         {
+//             // 检查3：在空闲链表中的块，其 allocated 标志位必须是 0
+//             if (GET_ALLOC(free_bp))
+//             {
+//                 printf("Heap Error: Allocated block found in free list at %p\n", free_bp);
+//                 return 0;
+//             }
+
+//             // 检查4：双向链表指针的一致性 (A->next->prev 必须等于 A)
+//             void *next = GET_NEXT_FREE_CHUNK(free_bp);
+//             void *prev = GET_PREV_FREE_CHUNK(free_bp);
+
+//             if (GET_PREV_FREE_CHUNK(next) != free_bp)
+//             {
+//                 printf("Heap Error: next->prev != current at %p\n", free_bp);
+//                 return 0;
+//             }
+//             if (GET_NEXT_FREE_CHUNK(prev) != free_bp)
+//             {
+//                 printf("Heap Error: prev->next != current at %p\n", free_bp);
+//                 return 0;
+//             }
+
+//             explicit_free_count++;
+//             free_bp = next;
+//         }
+//     }
+
+//     // ---------------------------------------------------------
+//     // 3. 交叉比对：检查是否有空闲块“迷路”了
+//     // ---------------------------------------------------------
+//     if (implicit_free_count != explicit_free_count)
+//     {
+//         printf("Heap Error: Free block count mismatch! Implicit: %d, Explicit: %d\n",
+//                implicit_free_count, explicit_free_count);
+//         return 0;
+//     }
+
+//     if (verbose)
+//     {
+//         printf("Heap is consistent. Total free blocks: %d\n", explicit_free_count);
+//     }
+
+//     return 1;
+// }
+
+// /**
+//  * mm_display_layout - 打印当前堆的物理内存布局
+//  * 遍历从堆底到堆顶的所有 chunk，识别已分配和未分配块。
+//  */
+// void mm_display_layout()
+// {
+//     void *bp = sentinel_chunk_ptr; // 从堆的最开始（哨兵位）开始
+//     size_t chunk_idx = 0;
+
+//     printf("\n--- Current Heap Layout Analysis ---\n");
+//     printf("%-5s %-18s %-10s %-10s %-20s\n", "Idx", "Address Range", "Size", "Status", "Payload Range");
+
+//     // mem_heap_hi() 返回的是堆的最后一个字节的地址
+//     while (bp != NULL && bp < mem_heap_hi())
+//     {
+//         size_t size = GET_SIZE(bp);
+//         int is_alloc = GET_ALLOC(bp);
+
+//         void *payload_start = CHUNK_TO_PAYLOAD(bp);
+//         void *payload_end = (char *)bp + size - CHUNK_FOOTER_SIZE;
+
+//         // 打印基本信息
+//         printf("[%3zu] %p-%p | %-8zu | %-8s | ",
+//                chunk_idx++,
+//                bp,
+//                (char *)bp + size - 1,
+//                size,
+//                is_alloc ? "ALLOC" : "FREE");
+
+//         if (is_alloc) {
+//             // 对于已分配块，标明用户可用的 Payload 范围
+//             printf("P: %p-%p", payload_start, (char *)payload_end - 1);
+//         } else {
+//             // 对于空闲块，可以顺便打印出它的链表指针 (Next/Prev)
+//             void *next = GET_NEXT_FREE_CHUNK(bp);
+//             void *prev = GET_PREV_FREE_CHUNK(bp);
+//             printf("Next: %p, Prev: %p", next, prev);
+//         }
+//         printf("\n");
+
+//         // 步进到下一个物理相邻的块
+//         if (size == 0) {
+//             printf("Error: Zero size chunk detected. Breaking loop.\n");
+//             break;
+//         }
+//         bp = (char *)bp + size;
+//     }
+//     printf("--- End of Heap Analysis ---\n\n");
+// }
+
+void *create_sentinel_chunk()
 {
-    void *bp;
-    size_t implicit_free_count = 0;
-    size_t explicit_free_count = 0;
-
-    // ---------------------------------------------------------
-    // 1. 隐式遍历：从 Sentinel Chunk 开始，按内存地址顺序遍历整个堆
-    // ---------------------------------------------------------
-    bp = sentinel_chunk_ptr;
-
-    // 假设 sentinel_chunk 是堆的最开头，遍历直到堆顶
-    while (bp != NULL && bp < mem_heap_hi())
-    {
-        size_t size = GET_SIZE(bp);
-        int alloc = GET_ALLOC(bp);
-
-        // 检查1：块大小不能为0，否则会导致死循环
-        if (size == 0 && bp != sentinel_chunk_ptr)
-        {
-            printf("Heap Error: Chunk size is 0 at %p\n", bp);
-            return 0;
-        }
-
-        // 检查2：Header 和 Footer 是否匹配
-        size_t header = GET(bp);
-        size_t footer = GET((char *)bp + size - CHUNK_FOOTER_SIZE);
-        if (header != footer)
-        {
-            printf("Heap Error: Header and Footer mismatch at %p\n", bp);
-            return 0;
-        }
-
-        // 统计真实的空闲块数量（跳过哨兵块）
-        if (!alloc && bp != sentinel_chunk_ptr)
-        {
-            implicit_free_count++;
-        }
-
-        // 步进到下一个块
-        bp = (char *)bp + size;
-    }
-
-    // ---------------------------------------------------------
-    // 2. 显式遍历：沿着双向链表的 next 指针进行遍历
-    // ---------------------------------------------------------
-    if (sentinel_chunk_ptr != NULL)
-    {
-        void *free_bp = GET_NEXT_FREE_CHUNK(sentinel_chunk_ptr);
-
-        while (free_bp != sentinel_chunk_ptr && free_bp != NULL)
-        {
-            // 检查3：在空闲链表中的块，其 allocated 标志位必须是 0
-            if (GET_ALLOC(free_bp))
-            {
-                printf("Heap Error: Allocated block found in free list at %p\n", free_bp);
-                return 0;
-            }
-
-            // 检查4：双向链表指针的一致性 (A->next->prev 必须等于 A)
-            void *next = GET_NEXT_FREE_CHUNK(free_bp);
-            void *prev = GET_PREV_FREE_CHUNK(free_bp);
-
-            if (GET_PREV_FREE_CHUNK(next) != free_bp)
-            {
-                printf("Heap Error: next->prev != current at %p\n", free_bp);
-                return 0;
-            }
-            if (GET_NEXT_FREE_CHUNK(prev) != free_bp)
-            {
-                printf("Heap Error: prev->next != current at %p\n", free_bp);
-                return 0;
-            }
-
-            explicit_free_count++;
-            free_bp = next;
-        }
-    }
-
-    // ---------------------------------------------------------
-    // 3. 交叉比对：检查是否有空闲块“迷路”了
-    // ---------------------------------------------------------
-    if (implicit_free_count != explicit_free_count)
-    {
-        printf("Heap Error: Free block count mismatch! Implicit: %d, Explicit: %d\n",
-               implicit_free_count, explicit_free_count);
-        return 0;
-    }
-
-    if (verbose)
-    {
-        printf("Heap is consistent. Total free blocks: %d\n", explicit_free_count);
-    }
-
-    return 1;
+    size_t size = SMALLEST_CHUNK_SIZE;
+    void *ptr = get_new_chunk_from_heap(size);
+    set_chunk_meta(ptr, size, 1);
+    set_chunk_next_p(ptr, ptr);
+    set_chunk_prev_p(ptr, ptr);
+    return ptr;
 }
 
 /*
@@ -339,11 +452,15 @@ int mm_checkheap(int verbose)
 int mm_init(void)
 {
     // sentinel chunk
-    size_t sentinel_chunk_size = SMALLEST_CHUNK_SIZE;
-    sentinel_chunk_ptr = get_new_chunk_from_heap(sentinel_chunk_size);
-    set_chunk_meta(sentinel_chunk_ptr, sentinel_chunk_size, 1);
-    set_chunk_next_p(sentinel_chunk_ptr, sentinel_chunk_ptr);
-    set_chunk_prev_p(sentinel_chunk_ptr, sentinel_chunk_ptr);
+    // size_t sentinel_chunk_size = SMALLEST_CHUNK_SIZE;
+    // sentinel_chunk_ptr = get_new_chunk_from_heap(sentinel_chunk_size);
+    // set_chunk_meta(sentinel_chunk_ptr, sentinel_chunk_size, 1);
+    // set_chunk_next_p(sentinel_chunk_ptr, sentinel_chunk_ptr);
+    // set_chunk_prev_p(sentinel_chunk_ptr, sentinel_chunk_ptr);
+    for (int i = 0; i < BUCKET_SIZE; i++)
+    {
+        bucket[i] = create_sentinel_chunk();
+    }
     return 0;
 }
 
@@ -355,7 +472,7 @@ void *mm_malloc(size_t size)
 {
     size_t newsize = (size >= (CHUNK_NEXT_FREE_P_SIZE + CHUNK_PREV_FREE_P_SIZE)) ? ALIGN(size + CHUNK_HEADER_SIZE + CHUNK_FOOTER_SIZE) : SMALLEST_CHUNK_SIZE;
 
-    void *ptr = find_free_chunk(newsize);
+    void *ptr = find_free_chunk_in_bucket(newsize);
     if (ptr == NULL)
     {
         ptr = get_new_chunk_from_heap(newsize);
@@ -454,7 +571,7 @@ void mm_free(void *ptr)
 
     if (new_free_chunk_ptr != NULL)
     {
-        insert_chunk_to_free_linked_list(new_free_chunk_ptr);
+        insert_chunk_to_bucket(new_free_chunk_ptr);
     }
 }
 
@@ -504,7 +621,7 @@ void *mm_realloc(void *ptr, size_t size)
                 void *new_chunk_ptr = (char *)oldptr + req_chunk_size;
                 size_t remaining_chunk_size = merged_chunk_size - req_chunk_size;
                 set_chunk_meta(new_chunk_ptr, remaining_chunk_size, 0);
-                insert_chunk_to_free_linked_list(new_chunk_ptr);
+                insert_chunk_to_bucket(new_chunk_ptr);
             }
             else
             {
