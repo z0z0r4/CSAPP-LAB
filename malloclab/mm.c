@@ -73,7 +73,7 @@ team_t team = {
 
 static void *sentinel_chunk_ptr = NULL;
 
-static void *rover = NULL;
+// static void *rover = NULL;
 
 void set_chunk_meta(void *ptr, size_t chunk_size, int allocated_flag)
 {
@@ -107,6 +107,59 @@ void *get_new_chunk_from_heap(size_t newsize)
     }
 }
 
+// first-fit
+// void *find_free_chunk(size_t chunk_size)
+// {
+//     if (sentinel_chunk_ptr == NULL)
+//     {
+//         return NULL;
+//     }
+
+//     void *ptr = GET_NEXT_FREE_CHUNK(sentinel_chunk_ptr);
+//     while (ptr != sentinel_chunk_ptr)
+//     {
+//         size_t current_chunk_size = GET_SIZE(ptr);
+//         if (current_chunk_size >= chunk_size && !GET_ALLOC(ptr))
+//         {
+//             return ptr;
+//         }
+//         ptr = GET_NEXT_FREE_CHUNK(ptr);
+//     }
+
+//     return NULL;
+// }
+
+// next-fit
+// void *find_free_chunk(size_t chunk_size)
+// {
+//     if (sentinel_chunk_ptr == NULL)
+//     {
+//         return NULL;
+//     }
+
+//     if (rover == NULL || rover == sentinel_chunk_ptr)
+//     {
+//         rover = GET_NEXT_FREE_CHUNK(sentinel_chunk_ptr);
+//     }
+
+//     void *start_ptr = rover;
+
+//     void *ptr = rover;
+//     do
+//     {
+//         size_t current_chunk_size = GET_SIZE(ptr);
+//         if (current_chunk_size >= chunk_size && !GET_ALLOC(ptr))
+//         {
+//             rover = GET_NEXT_FREE_CHUNK(ptr);
+//             return ptr;
+//         }
+//         ptr = GET_NEXT_FREE_CHUNK(ptr);
+//     } while (ptr != start_ptr);
+
+//     return NULL;
+// }
+
+// best-fit
 void *find_free_chunk(size_t chunk_size)
 {
     if (sentinel_chunk_ptr == NULL)
@@ -114,26 +167,29 @@ void *find_free_chunk(size_t chunk_size)
         return NULL;
     }
 
-    if (rover == NULL || rover == sentinel_chunk_ptr)
-    {
-        rover = GET_NEXT_FREE_CHUNK(sentinel_chunk_ptr);
-    }
-
-    void *start_ptr = rover;
-
-    void *ptr = rover;
-    do
+    size_t best_fit_size = -1;
+    void *best_fit_chunk_ptr = NULL;
+    void *ptr = GET_NEXT_FREE_CHUNK(sentinel_chunk_ptr);
+    while (ptr != sentinel_chunk_ptr)
     {
         size_t current_chunk_size = GET_SIZE(ptr);
-        if (current_chunk_size >= chunk_size && !GET_ALLOC(ptr))
+        if (current_chunk_size >= chunk_size && current_chunk_size - chunk_size < best_fit_size - chunk_size && !GET_ALLOC(ptr))
         {
-            rover = GET_NEXT_FREE_CHUNK(ptr);
-            return ptr;
+            best_fit_size = current_chunk_size;
+            best_fit_chunk_ptr = ptr;
+            if (best_fit_size == chunk_size) {
+                break;
+            }
         }
         ptr = GET_NEXT_FREE_CHUNK(ptr);
-    } while (ptr != start_ptr);
+    }
 
-    return NULL;
+    if (best_fit_chunk_ptr == sentinel_chunk_ptr)
+    {
+        return NULL;
+    }
+
+    return best_fit_chunk_ptr;
 }
 
 void insert_chunk_to_free_linked_list(void *ptr)
@@ -152,10 +208,10 @@ void insert_chunk_to_free_linked_list(void *ptr)
 
 void remove_chunk_from_free_linked_list(void *ptr)
 {
-    if (rover == ptr)
-    {
-        rover = GET_NEXT_FREE_CHUNK(ptr);
-    }
+    // if (rover == ptr)
+    // {
+    //     rover = GET_NEXT_FREE_CHUNK(ptr);
+    // }
 
     void *prev_chunk_ptr = GET_PREV_FREE_CHUNK(ptr);
     void *next_chunk_ptr = GET_NEXT_FREE_CHUNK(ptr);
