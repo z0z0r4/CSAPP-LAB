@@ -52,34 +52,46 @@ team_t team = {
 #define GET_NEXT_FREE_CHUNK(p) (OFFSET_TO_ADDR(GET_OFFSET((char *)(p) + CHUNK_HEADER_SIZE)))
 #define GET_PREV_FREE_CHUNK(p) (OFFSET_TO_ADDR(GET_OFFSET((char *)(p) + CHUNK_HEADER_SIZE + CHUNK_NEXT_FREE_OFFSET_SIZE)))
 
-/* 4 + 4 + 4 + 4 = 16 字节 */
+// 最小块大小
 #define SMALLEST_CHUNK_SIZE (CHUNK_HEADER_SIZE + CHUNK_FOOTER_SIZE + CHUNK_NEXT_FREE_OFFSET_SIZE + CHUNK_PREV_FREE_OFFSET_SIZE)
+
+// 划分小块和大块的界限
+#define MIN_LARGE_CHUNK_SIZE 96
 
 #define PRE_EXTEND_SIZE 4096
 
 static void *bucket[BUCKET_SIZE];
 
 int mm_checkheap(int verbose);
+void print_heap_view();
 
 /**
  * 混合桶索引计算 (Smallbins + Largebins)
  */
 int get_slot_index(size_t size)
 {
+    // Smallbins
+    // 对于小块，直接按 8 字节对齐划分为 8 个桶 (16, 24, ..., 72)，每个桶内的块大小相差 8 字节
     if (size <= 72)
     {
         return (size - 16) / 8;
     }
 
-    int class_index = 8;
-    size_t class_size = 128;
+    // int class_index = 8;
+    // size_t class_size = 128;
 
-    while (class_index < BUCKET_SIZE - 1 && size > class_size)
-    {
-        class_size <<= 1;
-        class_index++;
-    }
-    return class_index;
+    // // Largebins
+    // // 对于大块，按 2 的幂次划分为 16 个桶
+    // while (class_index < BUCKET_SIZE - 1 && size > class_size)
+    // {
+    //     class_size <<= 1;
+    //     class_index++;
+    // }
+    // return class_index;
+
+    // __builtin_clz 返回输入的前导零的数量
+    int k = 33 - __builtin_clz(size - 1);
+    return k < BUCKET_SIZE ? k : BUCKET_SIZE - 1;
 }
 
 void *get_slot_ptr(size_t size)
@@ -174,6 +186,10 @@ void *get_new_chunk_from_heap(size_t new_size)
 
 /**
  * Best-Fit
+ * 
+ * 由于严格按大小分桶，小对象的 Best-fit 和 First-fit 一样
+ * 
+ * 对于大对象应该试着找到最佳块
  */
 void *find_free_chunk(size_t chunk_size, void *sentinel_chunk_ptr)
 {
@@ -301,7 +317,6 @@ int mm_init(void)
  */
 void *mm_malloc(size_t size)
 {
-    mm_checkheap(1);
     if (size == 0)
         return NULL;
 
@@ -338,7 +353,7 @@ void *mm_malloc(size_t size)
     {
         size_t remaining_chunk_size = current_chunk_size - new_size;
 
-        if (new_size > 96)
+        if (new_size <= MIN_LARGE_CHUNK_SIZE)
         {
             allocated_ptr = ptr;
             set_chunk_meta(allocated_ptr, new_size, 1, GET_PREV_ALLOC(ptr));
@@ -346,6 +361,7 @@ void *mm_malloc(size_t size)
             void *remaining_ptr = (char *)allocated_ptr + new_size;
             set_chunk_meta(remaining_ptr, remaining_chunk_size, 0, 1);
             insert_chunk_to_bucket(remaining_ptr);
+            set_next_chunk_prev_alloc(remaining_ptr, 0);
         }
         else
         {
@@ -365,7 +381,6 @@ void *mm_malloc(size_t size)
         allocated_ptr = ptr;
     }
 
-    mm_checkheap(1);
     return CHUNK_TO_PAYLOAD(allocated_ptr);
 }
 
@@ -456,8 +471,8 @@ void mm_free(void *ptr)
  */
 void *mm_realloc(void *ptr, size_t size)
 {
-    mm_checkheap(1);
-    if (ptr == NULL) return mm_malloc(size);
+    if (ptr == NULL)
+        return mm_malloc(size);
     if (size == 0)
     {
         mm_free(ptr);
@@ -468,114 +483,311 @@ void *mm_realloc(void *ptr, size_t size)
     size_t old_size = GET_SIZE(old_ptr);
     size_t old_payload_size = old_size - CHUNK_HEADER_SIZE;
     size_t req_chunk_size = ALIGN(size + CHUNK_HEADER_SIZE);
-    
-    if (req_chunk_size < SMALLEST_CHUNK_SIZE) 
+
+    if (req_chunk_size < SMALLEST_CHUNK_SIZE)
         req_chunk_size = SMALLEST_CHUNK_SIZE;
 
-    // 原地缩容逻辑
+    // 原地缩容仅在块占用缩减到不足原来一半时，才分割释放剩余空间
     if (req_chunk_size <= old_size)
     {
-        void *remaining_chunk_ptr = separate_chunk(old_ptr, old_size, req_chunk_size);
-        if (remaining_chunk_ptr != NULL)
+        if (old_size > req_chunk_size * 2)
         {
-            set_chunk_meta(remaining_chunk_ptr, old_size - req_chunk_size, 0, 1);
-            insert_chunk_to_bucket(remaining_chunk_ptr);
-            set_next_chunk_prev_alloc(remaining_chunk_ptr, 0);
+            void *remaining_chunk_ptr = separate_chunk(old_ptr, old_size, req_chunk_size);
+            if (remaining_chunk_ptr != NULL)
+            {
+                set_chunk_meta(remaining_chunk_ptr, old_size - req_chunk_size, 0, 1);
+                insert_chunk_to_bucket(remaining_chunk_ptr);
+                set_next_chunk_prev_alloc(remaining_chunk_ptr, 0);
+            }
         }
         return ptr;
     }
 
-    // 堆顶扩展 (Trace 9)
-    // 如果当前块本身就是堆里的最后一个块（后面紧跟着 epilogue）
     void *next_physical_chunk = (char *)old_ptr + old_size;
-    if (is_nearby_epilogue_chunk(old_ptr) || 
-       (!GET_ALLOC(next_physical_chunk) && is_nearby_epilogue_chunk(next_physical_chunk)))
-    {
-        size_t next_size = GET_ALLOC(next_physical_chunk) ? 0 : GET_SIZE(next_physical_chunk);
-        size_t total_tail_size = old_size + next_size;
 
-        if (total_tail_size < req_chunk_size)
-        {
-            size_t extend_size = req_chunk_size - total_tail_size;
-            if (mem_sbrk(extend_size) == (void *)-1) return NULL;
-            total_tail_size = req_chunk_size;
-            // 更新 epilogue
-            set_epilogue_chunk(1);
-        }
-
-        if (!GET_ALLOC(next_physical_chunk) && next_size > 0)
-        {
-            remove_chunk_from_free_linked_list(next_physical_chunk);
-        }
-
-        set_chunk_meta(old_ptr, total_tail_size, 1, GET_PREV_ALLOC(old_ptr));
-        mm_checkheap(1);
-        return ptr;
-    }
-
-    // 双向合并 (Trace 10)
+    // 优先尝试与相邻的空闲块合并
     int prev_is_free = !GET_PREV_ALLOC(old_ptr);
     int next_is_free = !GET_ALLOC(next_physical_chunk);
-    
+
     size_t next_size = next_is_free ? GET_SIZE(next_physical_chunk) : 0;
     size_t prev_size = prev_is_free ? GET_SIZE((char *)old_ptr - CHUNK_FOOTER_SIZE) : 0;
-    
-    size_t total_avail = old_size + next_size + prev_size;
 
-    if (total_avail >= req_chunk_size)
+    size_t total_avail = old_size + next_size + prev_size;
+    void *new_base = prev_is_free ? (char *)old_ptr - prev_size : old_ptr;
+
+    int can_merge_prev = 1;
+    if (prev_is_free && total_avail >= req_chunk_size)
     {
-        void *new_base = prev_is_free ? (char *)old_ptr - prev_size : old_ptr;
+        int has_other_free = 0;
+        for (int b = 0; b < BUCKET_SIZE; b++)
+        {
+            void *sentinel = bucket[b];
+            void *p = GET_NEXT_FREE_CHUNK(sentinel);
+            while (p != sentinel)
+            {
+                if (p != new_base)
+                {
+                    has_other_free = 1;
+                    break;
+                }
+                p = GET_NEXT_FREE_CHUNK(p);
+            }
+            if (has_other_free)
+                break;
+        }
+        can_merge_prev = has_other_free;
+    }
+
+    if (total_avail >= req_chunk_size && can_merge_prev)
+    {
         int original_prev_alloc_flag = GET_PREV_ALLOC(new_base);
 
         if (prev_is_free)
         {
-            // 必须提前保存
+            // 保存前一个空闲块的链表指针
             void *p_prev_chunk = GET_PREV_FREE_CHUNK(new_base);
             void *n_next_chunk = GET_NEXT_FREE_CHUNK(new_base);
             set_chunk_next_p(p_prev_chunk, n_next_chunk);
             set_chunk_prev_p(n_next_chunk, p_prev_chunk);
 
-            // 再覆盖指针
+            // 移动数据到新位置
             memmove(CHUNK_TO_PAYLOAD(new_base), ptr, old_payload_size);
         }
-        
+
         if (next_is_free)
         {
             remove_chunk_from_free_linked_list(next_physical_chunk);
         }
 
-        // 设置新块元数据
+        // 设置合并后的块元数据
         set_chunk_meta(new_base, total_avail, 1, original_prev_alloc_flag);
 
-        // 分割
-        void *rem_ptr = separate_chunk(new_base, total_avail, req_chunk_size);
-        if (rem_ptr != NULL)
+        set_next_chunk_prev_alloc(new_base, 1);
+
+        return CHUNK_TO_PAYLOAD(new_base);
+    }
+
+    // 堆顶扩展
+    if (is_nearby_epilogue_chunk(old_ptr) ||
+        (!GET_ALLOC(next_physical_chunk) && is_nearby_epilogue_chunk(next_physical_chunk)))
+    {
+        size_t heap_next_size = GET_ALLOC(next_physical_chunk) ? 0 : GET_SIZE(next_physical_chunk);
+        size_t total_tail_size = old_size + heap_next_size;
+
+        if (total_tail_size < req_chunk_size)
         {
-            set_chunk_meta(rem_ptr, total_avail - req_chunk_size, 0, 1);
-            insert_chunk_to_bucket(rem_ptr);
-            set_next_chunk_prev_alloc(rem_ptr, 0);
-        }
-        else
-        {
-            set_next_chunk_prev_alloc(new_base, 1);
+            size_t extend_size = req_chunk_size - total_tail_size;
+            if (mem_sbrk(extend_size) == (void *)-1)
+                return NULL;
+            total_tail_size = req_chunk_size;
+            set_epilogue_chunk(1);
         }
 
-        mm_checkheap(1);
-        return CHUNK_TO_PAYLOAD(new_base);
+        if (!GET_ALLOC(next_physical_chunk) && heap_next_size > 0)
+        {
+            remove_chunk_from_free_linked_list(next_physical_chunk);
+        }
+        set_chunk_meta(old_ptr, total_tail_size, 1, GET_PREV_ALLOC(old_ptr));
+        set_next_chunk_prev_alloc(old_ptr, 1);
+        return ptr;
     }
 
     // 兜底 (malloc + memcpy + free)
     void *newptr = mm_malloc(size);
-    if (newptr == NULL) return NULL;
-    
+    if (newptr == NULL)
+        return NULL;
+
     memcpy(newptr, ptr, old_payload_size);
     mm_free(ptr);
-    mm_checkheap(1);
-    
     return newptr;
 }
 
+
 int mm_checkheap(int verbose)
 {
-    return 0; // 默认跳过检查以保证速度，开启调试可将其注释
+    return 0;
+    void *bp;
+    int prev_alloc_flag = 1;
+    size_t implicit_free_count = 0;
+    size_t explicit_free_count = 0;
+
+    // 隐式遍历：从 Sentinel Chunk 开始，按内存地址顺序遍历整个堆
+    bp = bucket[0] + 32 * BUCKET_SIZE;
+
+    void *epilogue_chunk_ptr = (char *)mem_heap_hi() - CHUNK_HEADER_SIZE + 1;
+
+    // 假设 sentinel_chunk 是堆的最开头，遍历直到堆顶
+    while (bp != NULL && bp < mem_heap_hi())
+    {
+        size_t size = GET_SIZE(bp);
+        int alloc = GET_ALLOC(bp);
+
+        // 检查1：块大小不能为0
+        if (size == 0)
+        {
+            if (bp == epilogue_chunk_ptr)
+            {
+                if (get_last_chunk_alloc() != prev_alloc_flag)
+                {
+                    printf("Heap Error: Epilogue chunk prev alloc flag %d not equal to prev_alloc_flag %d\n", get_last_chunk_alloc(), prev_alloc_flag);
+                }
+                break;
+            }
+            else
+            {
+
+                printf("Heap Error: Chunk size is 0 at %p\n", bp);
+                return 0;
+            }
+        }
+
+        // 检查 2：Header 和 Footer 是否匹配
+        size_t header = GET(bp);
+        if (!GET_ALLOC(bp))
+        {
+            void *footer_ptr = (char *)bp + size - CHUNK_FOOTER_SIZE;
+            size_t footer = GET(footer_ptr);
+            if (header != footer)
+            {
+                printf("Heap Error: Header and Footer mismatch at %p\n", bp);
+                return 0;
+            }
+        }
+
+        if (GET_PREV_ALLOC(bp) != prev_alloc_flag)
+        {
+            printf("Heap Error: Header prev alloc flag error at %p\n", bp);
+            return 0;
+        }
+
+        // 统计真实的空闲块数量
+        if (!alloc)
+        {
+            implicit_free_count++;
+        }
+
+        prev_alloc_flag = GET_ALLOC(bp);
+
+        // 步进到下一个块
+        bp = (char *)bp + size;
+    }
+
+    // 显式遍历：沿着双向链表的 next 指针进行遍历
+    for (int index = 0; index < BUCKET_SIZE; index++)
+    {
+        void *sentinel_chunk_ptr = bucket[index];
+        if (sentinel_chunk_ptr != NULL)
+        {
+            void *free_bp = GET_NEXT_FREE_CHUNK(sentinel_chunk_ptr);
+
+            while (free_bp != sentinel_chunk_ptr && free_bp != NULL)
+            {
+                // 检查 3：在空闲链表中的块，其 allocated 标志位必须是 0
+                if (GET_ALLOC(free_bp))
+                {
+                    printf("Heap Error: Allocated block found in free list at %p\n", free_bp);
+                    return 0;
+                }
+
+                // 检查 4：双向链表指针的一致性 (A->next->prev 必须等于 A)
+                void *next = GET_NEXT_FREE_CHUNK(free_bp);
+                void *prev = GET_PREV_FREE_CHUNK(free_bp);
+
+                if (GET_PREV_FREE_CHUNK(next) != free_bp)
+                {
+                    printf("Heap Error: next->prev != current at %p\n", free_bp);
+                    return 0;
+                }
+                if (GET_NEXT_FREE_CHUNK(prev) != free_bp)
+                {
+                    printf("Heap Error: prev->next != current at %p\n", free_bp);
+                    return 0;
+                }
+
+                // 统计空闲列表中的块数量
+                explicit_free_count++;
+                free_bp = next;
+            }
+        }
+    }
+
+    // 检查是否有空闲块不在空闲链表中
+    if (implicit_free_count != explicit_free_count)
+    {
+        printf("Heap Error: Free block count mismatch! Implicit: %d, Explicit: %d\n",
+               implicit_free_count, explicit_free_count);
+        return 0;
+    }
+
+    if (verbose)
+    {
+        printf("Heap is consistent. Total free blocks: %d\n", explicit_free_count);
+    }
+
+    return 1;
+}
+
+void print_heap_view()
+{
+    // 跳过 4 字节的对齐填充
+    void *start_ptr = (char *)mem_heap_lo() + 4;
+    void *first_user_chunk = (char *)start_ptr + (BUCKET_SIZE * 16);
+    void *epilogue = (char *)mem_heap_hi() - CHUNK_HEADER_SIZE + 1;
+    void *ptr = first_user_chunk;
+
+    size_t total_alloc = 0, total_free = 0;
+    int count_alloc = 0, count_free = 0;
+
+    printf("\n>>> HEAP VIEW <<<\n");
+    printf("--------------------------------------------------\n");
+
+    // 输出视图 (如 [A:24]-[F:128]-[A:16])
+    int line_len = 0;
+    while (ptr < epilogue)
+    {
+        size_t size = GET_SIZE(ptr);
+        if (size == 0)
+        {
+            printf("\n[ERROR] Encountered chunk with size 0 at %p. Heap corrupted!\n", ptr);
+            break;
+        }
+
+        int alloc = GET_ALLOC(ptr);
+        if (alloc)
+        {
+            line_len += printf("[A:%-4lu]-", (unsigned long)size);
+            total_alloc += size;
+            count_alloc++;
+        }
+        else
+        {
+            line_len += printf("[F:%-4lu]-", (unsigned long)size);
+            total_free += size;
+            count_free++;
+        }
+
+        // 换行
+        if (line_len > 60)
+        {
+            printf("\n");
+            line_len = 0;
+        }
+        ptr = (char *)ptr + size;
+    }
+
+    if (ptr == epilogue)
+    {
+        printf("[Epi]\n");
+    }
+    else
+    {
+        printf("\n[ERROR] Iteration did not land on epilogue exactly!\n");
+    }
+
+    printf("--------------------------------------------------\n");
+    printf("STATISTICS:\n");
+    printf("Total User Allocated : %d blocks, %lu bytes\n", count_alloc, (unsigned long)total_alloc);
+    printf("Total Free (Holes)   : %d blocks, %lu bytes\n", count_free, (unsigned long)total_free);
+    printf("Heap Total Size      : %lu bytes\n", (unsigned long)((char *)mem_heap_hi() - (char *)mem_heap_lo() + 1));
+    printf(">>> END VIEW <<<\n\n");
 }
