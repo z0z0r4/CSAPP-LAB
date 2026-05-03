@@ -58,9 +58,13 @@ team_t team = {
 // 划分小块和大块的界限
 #define MIN_LARGE_CHUNK_SIZE 96
 
+// SmallBin 与 LargeBin 的界限
+#define BIN_BOUNDARY 72
+
 #define PRE_EXTEND_SIZE 4096
 
 static void *bucket[BUCKET_SIZE];
+static int free_chunk_count = 0;
 
 int mm_checkheap(int verbose);
 void print_heap_view();
@@ -71,17 +75,17 @@ void print_heap_view();
 int get_slot_index(size_t size)
 {
     // Smallbins
-    // 对于小块，直接按 8 字节对齐划分为 8 个桶 (16, 24, ..., 72)，每个桶内的块大小相差 8 字节
-    if (size <= 72)
+    // 对于小块，直接按 8 字节对齐划分
+    if (size <= BIN_BOUNDARY)
     {
-        return (size - 16) / 8;
+        return (size - SMALLEST_CHUNK_SIZE) / 8;
     }
 
-    // int class_index = 8;
+    // int class_index = BOUNDARY_SIZE / 8 - 1;
     // size_t class_size = 128;
 
     // // Largebins
-    // // 对于大块，按 2 的幂次划分为 16 个桶
+    // // 对于大块，按 2 的幂次划分
     // while (class_index < BUCKET_SIZE - 1 && size > class_size)
     // {
     //     class_size <<= 1;
@@ -242,6 +246,7 @@ void insert_chunk_to_free_linked_list(void *ptr, void *sentinel_chunk_ptr)
     set_chunk_prev_p(ptr, sentinel_chunk_ptr);
     set_chunk_next_p(sentinel_chunk_ptr, ptr);
     set_chunk_prev_p(sentinel_chunk_next_chunk_ptr, ptr);
+    free_chunk_count++;
 }
 
 void insert_chunk_to_bucket(void *ptr)
@@ -256,6 +261,7 @@ void remove_chunk_from_free_linked_list(void *ptr)
     void *next_chunk_ptr = GET_NEXT_FREE_CHUNK(ptr);
     set_chunk_next_p(prev_chunk_ptr, next_chunk_ptr);
     set_chunk_prev_p(next_chunk_ptr, prev_chunk_ptr);
+    free_chunk_count--;
 }
 
 void *separate_chunk(void *ptr, size_t current_chunk_size, size_t new_chunk_size)
@@ -518,24 +524,7 @@ void *mm_realloc(void *ptr, size_t size)
     int can_merge_prev = 1;
     if (prev_is_free && total_avail >= req_chunk_size)
     {
-        int has_other_free = 0;
-        for (int b = 0; b < BUCKET_SIZE; b++)
-        {
-            void *sentinel = bucket[b];
-            void *p = GET_NEXT_FREE_CHUNK(sentinel);
-            while (p != sentinel)
-            {
-                if (p != new_base)
-                {
-                    has_other_free = 1;
-                    break;
-                }
-                p = GET_NEXT_FREE_CHUNK(p);
-            }
-            if (has_other_free)
-                break;
-        }
-        can_merge_prev = has_other_free;
+        can_merge_prev = (free_chunk_count > 1);
     }
 
     if (total_avail >= req_chunk_size && can_merge_prev)
@@ -544,11 +533,7 @@ void *mm_realloc(void *ptr, size_t size)
 
         if (prev_is_free)
         {
-            // 保存前一个空闲块的链表指针
-            void *p_prev_chunk = GET_PREV_FREE_CHUNK(new_base);
-            void *n_next_chunk = GET_NEXT_FREE_CHUNK(new_base);
-            set_chunk_next_p(p_prev_chunk, n_next_chunk);
-            set_chunk_prev_p(n_next_chunk, p_prev_chunk);
+            remove_chunk_from_free_linked_list(new_base);
 
             // 移动数据到新位置
             memmove(CHUNK_TO_PAYLOAD(new_base), ptr, old_payload_size);
