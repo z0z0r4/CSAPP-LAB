@@ -153,6 +153,8 @@ int main(int argc, char **argv)
 
     /* temporaries used to compute the performance index */
     double secs, ops, util, avg_mm_util, avg_mm_throughput, p1, p2, perfindex;
+	double libc_secs, libc_ops, avg_libc_throughput;
+	double throughput_baseline;
     int numcorrect;
     
     /* 
@@ -314,6 +316,21 @@ int main(int argc, char **argv)
 	printf("\n");
     }
 
+	/*
+	 * Accmulate the aggregate statistics for the libc malloc package 
+	 */
+	if (run_libc) {
+	    libc_secs = 0;
+	    libc_ops = 0;
+	    for (i=0; i < num_tracefiles; i++) {
+		libc_secs += libc_stats[i].secs;
+		libc_ops += libc_stats[i].ops;
+		if (libc_stats[i].valid)
+		    numcorrect++;
+	    }
+		avg_libc_throughput = libc_ops/libc_secs;
+	}
+
     /* 
      * Accumulate the aggregate statistics for the student's mm package 
      */
@@ -337,12 +354,18 @@ int main(int argc, char **argv)
 	avg_mm_throughput = ops/secs;
 
 	p1 = UTIL_WEIGHT * avg_mm_util;
-	if (avg_mm_throughput > AVG_LIBC_THRUPUT) {
+	
+	if (run_libc) {
+		throughput_baseline = avg_libc_throughput;
+	} else {
+		throughput_baseline = AVG_LIBC_THRUPUT;
+	}
+	if (avg_mm_throughput > throughput_baseline) {
 	    p2 = (double)(1.0 - UTIL_WEIGHT);
 	} 
 	else {
 	    p2 = ((double) (1.0 - UTIL_WEIGHT)) * 
-		(avg_mm_throughput/AVG_LIBC_THRUPUT);
+		(avg_mm_throughput/throughput_baseline);
 	}
 	
 	perfindex = (p1 + p2)*100.0;
